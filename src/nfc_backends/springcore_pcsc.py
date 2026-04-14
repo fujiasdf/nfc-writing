@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+import typing
+from dataclasses import dataclass, field
 
 from .base import NfcWriter, WriteResult
 from ..ndef import ndef_message_single, ndef_text, ndef_uri, tlv_ndef
@@ -13,13 +14,14 @@ def _to_hex(b: bytes) -> str:
 
 @dataclass
 class PcscConfig:
-    reader_name_contains: str = "SpringCard"
+    reader_name_contains: str = ""
     poll_interval_s: float = 0.2
     write_timeout_s: float | None = None
     wait_remove_after_write: bool = True
     remove_poll_interval_s: float = 0.2
-    remove_timeout_s: float | None = None
+    remove_timeout_s: float = 30.0
     forbid_uid_hex: str | None = None
+    stop_check: "typing.Callable[[], bool] | None" = None
 
 
 class SpringCorePcscWriter(NfcWriter):
@@ -54,16 +56,35 @@ class SpringCorePcscWriter(NfcWriter):
         # fallback to first
         return rs[0]
 
+    def _stopped(self) -> bool:
+        return self.cfg.stop_check is not None and self.cfg.stop_check()
+
     def _connect_wait(self):
+        import sys
+        from smartcard.scard import SCARD_PROTOCOL_T0, SCARD_PROTOCOL_T1
         reader = self._select_reader()
-        conn = reader.createConnection()
+        print(f"[PCSC] _connect_wait: reader={reader}", file=sys.stderr, flush=True)
 
         deadline = None if self.cfg.write_timeout_s is None else (time.time() + self.cfg.write_timeout_s)
+        attempt = 0
         while True:
+            if self._stopped():
+                raise RuntimeError("stopped")
+            conn = reader.createConnection()
             try:
                 conn.connect()
+                # Verify the connection works by reading UID
+                self._get_uid(conn)
+                print(f"[PCSC] connected on attempt {attempt}", file=sys.stderr, flush=True)
                 return conn
-            except Exception:
+            except Exception as e:
+                if attempt % 10 == 0:
+                    print(f"[PCSC] connect attempt {attempt}: {e}", file=sys.stderr, flush=True)
+                try:
+                    conn.disconnect()
+                except Exception:
+                    pass
+                attempt += 1
                 if deadline is not None and time.time() > deadline:
                     raise TimeoutError("タグ待ちがタイムアウトしました")
                 time.sleep(self.cfg.poll_interval_s)
@@ -88,28 +109,49 @@ class SpringCorePcscWriter(NfcWriter):
 
         deadline = None if self.cfg.remove_timeout_s is None else (time.time() + self.cfg.remove_timeout_s)
         while True:
+            if self._stopped():
+                return
             if deadline is not None and time.time() > deadline:
                 return
             try:
                 cur = self._get_uid(conn)
             except Exception:
-                # removed (or no longer readable)
+                try:
+                    conn.disconnect()
+                except Exception:
+                    pass
                 return
             if cur != uid:
                 return
             time.sleep(self.cfg.remove_poll_interval_s)
 
     def _get_nfc_forum_tag_type(self, conn) -> int:
+        # Try SpringCard-specific command first
         data, sw1, sw2 = self._tx(conn, [0xFF, 0xCA, 0xF1, 0x01, 0x00])
-        if (sw1, sw2) != (0x90, 0x00) or len(data) < 1:
-            return 0
-        return data[0]
+        if (sw1, sw2) == (0x90, 0x00) and len(data) >= 1 and data[0] != 0:
+            return data[0]
+        # Fallback: detect Type 2 tag by reading CC at page 3
+        try:
+            cc = self._read_page4(conn, 3)
+            if cc[0] == 0xE1:  # NDEF magic byte → Type 2 tag
+                return 2
+        except Exception:
+            pass
+        return 0
 
     def _read_page4(self, conn, page: int) -> bytes:
         # READ BINARY: FF B0 00 <page> <Le>
         data, sw1, sw2 = self._tx(conn, [0xFF, 0xB0, 0x00, page & 0xFF, 0x04])
         if (sw1, sw2) != (0x90, 0x00) or len(data) != 4:
             raise RuntimeError(f"READ page {page} failed: {sw1:02X}{sw2:02X}")
+        return data
+
+    def _read_pages(self, conn, start_page: int, num_bytes: int) -> bytes:
+        """READ BINARY で複数ページ分を一括読み出し"""
+        le = min(num_bytes, 0xFF)  # 最大255バイト
+        data, sw1, sw2 = self._tx(conn, [0xFF, 0xB0, 0x00, start_page & 0xFF, le])
+        if (sw1, sw2) != (0x90, 0x00):
+            raise RuntimeError(f"READ pages from {start_page} failed: {sw1:02X}{sw2:02X}")
         return data
 
     def _write_page4(self, conn, page: int, buf4: bytes) -> None:
@@ -147,6 +189,18 @@ class SpringCorePcscWriter(NfcWriter):
             page = start_page + i
             chunk = data[i * 4 : i * 4 + 4]
             self._write_page4(conn, page, chunk)
+
+        # Verify: read back and compare. If the tag was already removed
+        # (all write commands succeeded), treat as OK.
+        try:
+            actual = self._read_pages(conn, start_page, len(data))
+        except Exception:
+            return  # tag removed after successful writes — OK
+        if actual[:len(data)] != data:
+            raise RuntimeError(
+                "ベリファイ失敗: 書き込みデータと読み戻しが不一致。"
+                "タグを3秒以上かざしたまま保持してください。"
+            )
 
     def write_uri(self, uri: str, *, timeout_s: float | None = None) -> WriteResult:
         if timeout_s is not None:

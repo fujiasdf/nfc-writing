@@ -18,7 +18,7 @@ def _make_writer(*, mock: bool, pcsc: bool, reader_contains: str) -> NfcWriter:
     raise RuntimeError("実機モードが指定されていません（--pcsc を付けてください）")
 
 
-def run_cli(*, csv_path: str, mock: bool, pcsc: bool = False, reader_contains: str = "SpringCard") -> int:
+def run_cli(*, csv_path: str, mock: bool, pcsc: bool = False, reader_contains: str = "") -> int:
     items = load_csv(csv_path)
     writer = _make_writer(mock=mock, pcsc=pcsc, reader_contains=reader_contains)
 

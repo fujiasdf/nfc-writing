@@ -8,8 +8,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--csv", default="", help="CSV path")
     ap.add_argument("--mock", action="store_true", help="Force mock mode")
     ap.add_argument("--cli", action="store_true", help="Run in CLI mode (recommended on macOS)")
-    ap.add_argument("--pcsc", action="store_true", help="Use PC/SC reader (PUCK Base)")
-    ap.add_argument("--reader-contains", default="SpringCard", help="PC/SC reader name contains")
+    ap.add_argument("--pcsc", action="store_true", help="Use PC/SC reader")
+    ap.add_argument("--reader-contains", default="", help="PC/SC reader name contains (empty=auto)")
     args = ap.parse_args(argv)
 
     if args.cli:

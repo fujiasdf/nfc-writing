@@ -1,88 +1,119 @@
 # NFC Batch Writer
 
-CSVやURLを使って、NFCタグへNDEFデータを連続書き込みするツールです。  
-ブラウザUI・GUI・CLIの3モードに対応しています。
+NFCタグにURLやテキストを一括で書き込むツールです。  
+スマホでタグをかざすだけで指定のWebページが開くようになります。
 
-## 機能
+## できること
 
-- **CSV連続書き込み** — CSVの各行を順番にNFCタグへ書き込み、成功したら自動で次の行へ進む
-- **単一URL繰り返し書き込み** — 同じURLを何枚ものタグに連続で書き込む
-- **同一タグ検知** — 書き込み済みのタグを外さずにかざし続けても重複書き込みしない
-- **1つ戻す** — 書き込みミス時にカーソルを1行戻せる
-- **モックモード** — NFCリーダーがなくても動作確認できる
-- **成功/失敗時のビープ音**（macOS対応）
+- **CSV一括書き込み** — CSVファイルに書いたURLを、1枚ずつ順番にNFCタグへ書き込み
+- **同じURLを大量に書き込み** — 1つのURLを何十枚ものタグに連続で書き込み
+- **書き込みミス防止** — 同じタグへの重複書き込みを自動で検知。書き込み後に読み戻し検証あり
+- **1つ戻す** — 間違えたら1行前に戻せる
+- **リーダーなしでお試し** — モックモードでリーダーがなくても動作確認OK
 
-## 必要なもの
+## 用意するもの
 
-- Python 3.9 以上
-- （実機書き込みの場合）PC/SC対応のUSB NFCリーダー/ライター
-  - 動作確認済み: [SpringCard PUCK Base](https://www.springcard.com/en/products/puck-base)
-  - ACR122U系なども `src/nfc_backends/` を調整すれば対応可能
+| # | 必要なもの | 備考 |
+|---|-----------|------|
+| 1 | **パソコン** | Mac / Windows どちらでもOK |
+| 2 | **Python 3.9 以上** | [python.org](https://www.python.org/downloads/) からダウンロード |
+| 3 | **USB NFCリーダー/ライター** | 下記のおすすめ参照 |
+| 4 | **書き込み用NFCタグ** | NTAG213 / NTAG215 / NTAG216 など（NFC Forum Type 2 Tag） |
 
-> **macOSの内蔵NFCでは任意のタグへの書き込みはできません。** USB接続のリーダー/ライターが必要です。
+### おすすめNFCリーダー
 
-## セットアップ
+- **[ACR122U](https://www.acs.com.hk/en/products/3/acr122u-nfc-contactless-smart-card-reader/)** — Amazonなどで3,000〜5,000円程度。定番で情報も多い
+- [SpringCard PUCK Base](https://www.springcard.com/en/products/puck-base) — 動作確認済み
+
+> **macOSの内蔵NFCではタグへの書き込みはできません。** 必ずUSB接続のリーダーが必要です。
+
+---
+
+## 導入手順（はじめての方向け）
+
+### Step 1: Pythonをインストール
+
+既にインストール済みの方はスキップしてください。
+
+1. [python.org](https://www.python.org/downloads/) にアクセス
+2. 「Download Python 3.x.x」ボタンをクリックしてダウンロード
+3. ダウンロードしたファイルを開いてインストール
+   - **Windows の場合:** インストール画面で **「Add Python to PATH」にチェックを入れてから** インストール
+
+### Step 2: NFCリーダー（ACR122U）のセットアップ
+
+1. [ACR122U 製品ページ](https://www.acs.com.hk/en/products/3/acr122u-nfc-contactless-smart-card-reader/) の「Drivers」タブを開く
+2. お使いのOSに合ったドライバをダウンロードしてインストール
+   - **Mac:** `.pkg` ファイルをダブルクリック → 画面の指示に従う
+   - **Windows:** `.exe` ファイルをダブルクリック → 画面の指示に従う
+3. ACR122UをUSBケーブルでパソコンに接続（緑色のLEDが点灯すればOK）
+
+> **Mac で書き込みが不安定な場合:**  
+> macOS標準のNFCデーモンと競合することがあります。ターミナルを開いて以下を実行してください:
+> ```
+> sudo killall -9 com.apple.ifdreader
+> ```
+
+### Step 3: ターミナル（コマンドプロンプト）を開く
+
+コマンドを入力するための画面を開きます。
+
+- **Mac:** Finder →「アプリケーション」→「ユーティリティ」→「ターミナル」を開く  
+  （または Spotlight で「ターミナル」と検索）
+- **Windows:** スタートメニューで「cmd」と検索 →「コマンドプロンプト」を開く
+
+以降の手順はすべてこの画面にコマンドを入力して実行します。
+
+### Step 4: このツールをダウンロードしてセットアップ
+
+ターミナル（コマンドプロンプト）に以下を1行ずつ貼り付けて Enter を押してください。
 
 ```bash
-# リポジトリをクローン
+# ダウンロード
 git clone https://github.com/<your-username>/nfc-batch-writer.git
+
+# ダウンロードしたフォルダに移動
 cd nfc-batch-writer
 
-# Python仮想環境を作成・有効化
+# Python仮想環境を作成（初回のみ）
 python3 -m venv .venv
-source .venv/bin/activate
 
-# 依存パッケージをインストール
+# 仮想環境を有効化（毎回ツールを使う前に実行）
+source .venv/bin/activate        # Mac の場合
+# .venv\Scripts\activate         # Windows の場合
+
+# 必要なライブラリをインストール（初回のみ）
 pip install -r requirements.txt
 ```
 
-### pyscardのインストールでエラーが出る場合（macOS）
+> **Mac で `pip install` がエラーになる場合:**
+> ```bash
+> xcode-select --install    # 開発者ツールをインストール
+> brew install swig          # swigをインストール（Homebrewが必要）
+> pip install pyscard        # 再インストール
+> ```
+
+### Step 5: ツールを起動して書き込み開始
 
 ```bash
-# Xcode Command Line Tools
-xcode-select --install
+# 仮想環境を有効化（Step 4 から続けている場合は不要）
+source .venv/bin/activate        # Mac
+# .venv\Scripts\activate         # Windows
 
-# swigが必要な場合
-brew install swig
-
-# 再インストール
-pip install pyscard
-```
-
-## 使い方
-
-### ブラウザUI（おすすめ）
-
-```bash
-source .venv/bin/activate
+# ブラウザUIを起動
 python3 -m src.web_main
 ```
 
-ブラウザで http://127.0.0.1:8787 を開きます。
+ターミナルに `Uvicorn running on http://127.0.0.1:8787` と表示されたら成功です。
 
-1. **モード選択** — 「単一URL」か「CSV」を選ぶ
-2. **CSVモードの場合** — CSVファイルをアップロード
-3. **リーダー選択** — Mock（実機なし）またはPC/SC（実機）を選ぶ
-4. **開始ボタン** — タグをかざすと書き込み開始
+1. ブラウザ（Chrome, Safari など）で **http://127.0.0.1:8787** を開く
+2. **モード選択** — 「単一URL」か「CSV」を選ぶ
+3. **リーダー選択** — 「PC/SC」を選ぶ（ACR122Uが自動で認識されます）
+4. **「開始」ボタン** を押す
+5. **NFCタグをリーダーにかざす**（3秒以上しっかり当てたまま待つ）
+6. 「ピッ」と鳴ったら書き込み成功 → タグを離して次のタグをかざす
 
-### CLI
-
-```bash
-# モックモード（実機なし・動作確認用）
-python3 -m src.app --cli --mock --csv sample.csv
-
-# 実機モード（PC/SCリーダー使用）
-python3 -m src.app --cli --pcsc --csv sample.csv
-
-# リーダー名を指定（デフォルト: SpringCard）
-python3 -m src.app --cli --pcsc --reader-contains "ACR122" --csv sample.csv
-```
-
-### GUI（tkinter）
-
-```bash
-python3 -m src.app --csv sample.csv
-```
+> **リーダーなしで試したい場合:** リーダー選択で「Mock」を選べば、リーダーがなくても画面の操作を試せます。
 
 ## CSVフォーマット
 

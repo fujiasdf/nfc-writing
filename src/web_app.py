@@ -28,7 +28,7 @@ class RunState:
     mode: Mode = "mock"
     run_mode: RunMode = "csv"
     single_url: str = ""
-    reader_contains: str = "SpringCard"
+    reader_contains: str = ""
     last_ok_tag_id: str = ""
     last_ok_row: int = -1
     rewind_active: bool = False
@@ -354,6 +354,7 @@ def _html_page(body: str) -> HTMLResponse:
             if (!e.running) hint.textContent = "停止中";
             else hint.textContent = "タグをかざしてください（書き込み後はタグを外して次へ）";
           }}
+          if (!e.running) {{ clearInterval(readerPollId); readerPollId = setInterval(checkReader, 3000); }}
         }}
         if (evType === "waiting") {{
           setStatus(e.row, "waiting");
@@ -424,7 +425,7 @@ def _html_page(body: str) -> HTMLResponse:
         }}
       }} catch(e) {{}}
     }}
-    setInterval(checkReader, 3000);
+    let readerPollId = setInterval(checkReader, 10000);
     async function startRun() {{
       const fd = new FormData();
       fd.append("mode", document.getElementById("modeSel").value);
@@ -432,6 +433,7 @@ def _html_page(body: str) -> HTMLResponse:
       const rm = document.querySelector('input[name="runMode"]:checked')?.value || "csv";
       fd.append("run_mode", rm);
       fd.append("single_url", document.getElementById("singleUrl")?.value || "");
+      clearInterval(readerPollId); // Stop reader polling to avoid PC/SC interference
       await post("/start", fd);
     }}
     async function backOne() {{
@@ -446,6 +448,7 @@ def _html_page(body: str) -> HTMLResponse:
     }}
     async function stopRun() {{
       await post("/stop", new FormData());
+      readerPollId = setInterval(checkReader, 3000); // Resume polling
     }}
     function syncRunModeUI() {{
       const rm = document.querySelector('input[name="runMode"]:checked')?.value || "csv";
@@ -549,7 +552,7 @@ def index() -> HTMLResponse:
         <label>モード</label><div style="height:4px"></div>
         <select id="modeSel" style="width:100%;">
           <option value="mock" {"selected" if STATE.mode=="mock" else ""}>Mock（実機なし）</option>
-          <option value="pcsc" {"selected" if STATE.mode=="pcsc" else ""}>PC/SC（PUCK）</option>
+          <option value="pcsc" {"selected" if STATE.mode=="pcsc" else ""}>PC/SC（実機）</option>
         </select>
       </div>
       <div style="flex:1;">
@@ -610,7 +613,11 @@ def _make_writer(mode: Mode, reader_contains: str, forbid_uid_hex: str | None = 
     if mode == "mock":
         # In web UI, "mock" waits for a manual TAP signal (see _wait_tap).
         return MockWriter(tap_delay_s=0.0)
-    return SpringCorePcscWriter(PcscConfig(reader_name_contains=reader_contains, forbid_uid_hex=forbid_uid_hex))
+    return SpringCorePcscWriter(PcscConfig(
+        reader_name_contains=reader_contains,
+        forbid_uid_hex=forbid_uid_hex,
+        stop_check=lambda: STATE.stop_flag.is_set(),
+    ))
 
 def _write_one(writer, url: str):
     return writer.write_uri(url, timeout_s=None)
@@ -648,17 +655,21 @@ def _worker_loop(mode: Mode, reader_contains: str, run_mode: RunMode, single_url
         url = (single_url or "").strip()
         while not STATE.stop_flag.is_set():
             STATE.push("writing", {"row": -1, "item_type": "uri", "payload": url})
+            STATE.push("waiting", {"row": -1})
             if mode == "mock":
-                STATE.push("waiting", {"row": -1})
                 if not _wait_tap(STATE.stop_flag):
                     break
+            import sys
+            print(f"[WORKER] calling _write_one url={url[:50]}", file=sys.stderr, flush=True)
             try:
                 res = _write_one(writer, url)
             except Exception as e:
+                print(f"[WORKER] exception: {e}", file=sys.stderr, flush=True)
                 beep_error()
                 STATE.push("error", {"row": -1, "message": str(e)})
                 time.sleep(0.2)
                 continue
+            print(f"[WORKER] result: ok={res.ok} msg={res.message}", file=sys.stderr, flush=True)
 
             if res.ok:
                 beep_ok()
@@ -761,7 +772,7 @@ def _worker_loop(mode: Mode, reader_contains: str, run_mode: RunMode, single_url
 @APP.post("/start")
 def start(
     mode: Mode = Form("mock"),
-    reader_contains: str = Form("SpringCard"),
+    reader_contains: str = Form(""),
     run_mode: RunMode = Form("csv"),
     single_url: str = Form(""),
 ) -> dict:
@@ -860,20 +871,14 @@ def tap() -> dict:
 
 @APP.get("/reader_status")
 def reader_status() -> dict:
-    """Check if an NFC reader is connected."""
-    if STATE.mode == "mock":
-        return {"connected": False, "mode": "mock", "reader_name": None}
-    try:
-        from smartcard.System import readers
-        reader_list = readers()
-        for r in reader_list:
-            if STATE.reader_contains.lower() in str(r).lower():
-                return {"connected": True, "mode": "pcsc", "reader_name": str(r)}
-        if reader_list:
-            return {"connected": True, "mode": "pcsc", "reader_name": str(reader_list[0])}
-        return {"connected": False, "mode": "pcsc", "reader_name": None}
-    except Exception:
-        return {"connected": False, "mode": "pcsc", "reader_name": None, "error": "pyscard not available"}
+    """Return reader status without touching PC/SC (avoids ACR122U interference)."""
+    if STATE.running:
+        return {"connected": True, "mode": STATE.mode, "reader_name": "書き込み中..."}
+    # Never call pyscard readers() from HTTP threads — it corrupts ACR122U state.
+    # Just report the selected mode. Actual reader detection happens at write time.
+    if STATE.mode == "pcsc":
+        return {"connected": True, "mode": "pcsc", "reader_name": "PC/SC"}
+    return {"connected": False, "mode": "mock", "reader_name": None}
 
 
 @APP.get("/events")
