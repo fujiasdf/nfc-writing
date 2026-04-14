@@ -22,7 +22,7 @@ NFCタグにURLやテキストを一括で書き込むツールです。
 
 ### おすすめNFCリーダー
 
-- **[ACR122U](https://www.acs.com.hk/en/products/3/acr122u-nfc-contactless-smart-card-reader/)** — Amazonなどで3,000〜5,000円程度。定番で情報も多い
+- **[ACR122U](https://www.acs.com.hk/en/products/3/acr122u-nfc-contactless-smart-card-reader/)** — 動作確認済み。Amazonなどで3,000〜5,000円程度。定番で情報も多い
 - [SpringCard PUCK Base](https://www.springcard.com/en/products/puck-base) — 動作確認済み
 
 > **macOSの内蔵NFCではタグへの書き込みはできません。** 必ずUSB接続のリーダーが必要です。
